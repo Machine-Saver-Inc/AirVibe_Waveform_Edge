@@ -1,4 +1,5 @@
 name: provision-edge
+
 on:
   workflow_dispatch:
     inputs:
@@ -22,66 +23,68 @@ permissions:
 jobs:
   provision:
     runs-on: ubuntu-latest
+
+    # Map repo Secrets/Variables into Terraform env vars
     env:
-      # Terraform providers / cloud-init inputs
-      TF_VAR_linode_token:         ${{ secrets.LINODE_TOKEN }}
-      TF_VAR_label:                ${{ github.event.inputs.label }}
-      TF_VAR_region:               ${{ github.event.inputs.region }}
-      TF_VAR_type:                 ${{ github.event.inputs.type }}
-      TF_VAR_image:                linode/ubuntu24.04
-      TF_VAR_ssh_pub_key:          ${{ secrets.SSH_PUB_KEY }}
-      TF_VAR_root_pass:            ${{ secrets.ROOT_PASS }}
+      # Linode + instance
+      TF_VAR_linode_token:  ${{ secrets.LINODE_TOKEN }}
+      TF_VAR_label:         ${{ github.event.inputs.label }}
+      TF_VAR_region:        ${{ github.event.inputs.region }}
+      TF_VAR_type:          ${{ github.event.inputs.type }}
+      TF_VAR_image:         linode/ubuntu24.04
+      TF_VAR_ssh_pub_key:   ${{ secrets.SSH_PUB_KEY }}
+      TF_VAR_root_pass:     ${{ secrets.ROOT_PASS }}
 
-      TF_VAR_domain:               ${{ vars.DOMAIN }}
-      TF_VAR_repo_url:             ${{ vars.REPO_URL }}
-      TF_VAR_acme_email:           ${{ vars.ACME_EMAIL }}
+      # Project config
+      TF_VAR_domain:        ${{ vars.DOMAIN }}
+      TF_VAR_repo_url:      ${{ vars.REPO_URL }}
+      TF_VAR_acme_email:    ${{ vars.ACME_EMAIL }}
 
-      # Cloudflare token optional; if absent + CERT_MODE=private, we use Server CA path
+      # Cloudflare (optional; used by provider + injected to cloud-init for LE DNS-01)
       CLOUDFLARE_API_TOKEN:        ${{ secrets.CF_API_TOKEN }}
       TF_VAR_cloudflare_api_token: ${{ secrets.CF_API_TOKEN }}
 
-      # Admin token for issuance endpoints (set this as a repo variable or secret)
-      TF_VAR_admin_token:          ${{ vars.ADMIN_TOKEN }}
-
-      # Certificate mode for Mosquitto server: private | letsencrypt
-      TF_VAR_cert_mode:            ${{ vars.CERT_MODE }}
+      # API admin + cert mode
+      TF_VAR_admin_token:   ${{ vars.ADMIN_TOKEN }}
+      TF_VAR_cert_mode:     ${{ vars.CERT_MODE }}
 
     steps:
+      - name: Ensure defaults (safe fallbacks)
+        shell: bash
+        run: |
+          # Default CERT_MODE if not set
+          if [ -z "${TF_VAR_cert_mode}" ]; then
+            echo "TF_VAR_cert_mode=private" >> "$GITHUB_ENV"
+            echo "INFO: CERT_MODE unset; defaulting to 'private'." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Preflight checks
+        shell: bash
         run: |
           if [ -z "${TF_VAR_admin_token}" ]; then
             echo "ERROR: ADMIN_TOKEN (repo variable) is required." >&2
+            echo "Set it here: Settings → Secrets and variables → Actions → Variables." >&2
             exit 1
           fi
           if [ -z "${TF_VAR_domain}" ]; then
             echo "ERROR: DOMAIN (repo variable) is required." >&2
             exit 1
           fi
+          if [ -z "${TF_VAR_repo_url}" ]; then
+            echo "ERROR: REPO_URL (repo variable) is required (HTTPS URL of this Edge repo)." >&2
+            exit 1
+          fi
+          if [ -z "${TF_VAR_linode_token}" ] || [ -z "${TF_VAR_ssh_pub_key}" ] || [ -z "${TF_VAR_root_pass}" ]; then
+            echo "ERROR: LINODE_TOKEN, SSH_PUB_KEY, and ROOT_PASS must be set as repo Secrets." >&2
+            exit 1
+          fi
+          echo "✅ Preflight passed."
 
       - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
-
-# Add this step BEFORE "Terraform Init
-- name: Ensure defaults for ADMIN_TOKEN and CERT_MODE
-  run: |
-    if [ -z "${TF_VAR_admin_token}" ]; then
-      echo "TF_VAR_admin_token=$(openssl rand -hex 24)" >> $GITHUB_ENV
-      echo "INFO: ADMIN_TOKEN was unset; generated a one-time token for this run."
-    fi
-    if [ -z "${TF_VAR_cert_mode}" ]; then
-      echo "TF_VAR_cert_mode=private" >> $GITHUB_ENV
-      echo "INFO: CERT_MODE unset; defaulting to 'private'."
-    fi
-
-
-
-
-
-
-
 
       - name: Terraform Init
         working-directory: terraform
@@ -97,15 +100,17 @@ jobs:
         run: terraform output -json > tfout.json
 
       - name: Wait for API health
+        shell: bash
         run: |
           EDGE_DOMAIN=$(jq -r '.edge_domain.value' terraform/tfout.json)
+          echo "Edge domain: ${EDGE_DOMAIN}" >> "$GITHUB_STEP_SUMMARY"
           echo "Waiting for API at https://${EDGE_DOMAIN}/healthz"
           for i in {1..30}; do
-            if curl -sf "https://${EDGE_DOMAIN}/healthz" >/dev/null; then
-              echo "API is up at https://${EDGE_DOMAIN}/healthz"
+            if curl -sSf "https://${EDGE_DOMAIN}/healthz" >/dev/null; then
+              echo "API is up at https://${EDGE_DOMAIN}/healthz" | tee -a "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
             sleep 10
           done
-          echo "Timed out waiting for API" >&2
+          echo "Timed out waiting for API at https://${EDGE_DOMAIN}/healthz" >&2
           exit 1
