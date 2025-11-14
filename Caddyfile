@@ -1,0 +1,4 @@
+https://edge.{env.DOMAIN} {
+  encode gzip
+  reverse_proxy api:{env.API_PORT}
+}

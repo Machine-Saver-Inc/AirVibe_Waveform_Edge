@@ -1,0 +1,73 @@
+name: provision-edge
+on:
+  workflow_dispatch:
+    inputs:
+      label:
+        description: "Linode label"
+        required: false
+        default: "ms-edge-01"
+      region:
+        description: "Linode region"
+        required: false
+        default: "us-east"
+      type:
+        description: "Linode type"
+        required: false
+        default: "g6-nanode-1"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init
+
+      - name: Terraform Apply
+        working-directory: terraform
+        env:
+          TF_VAR_linode_token:        ${{ secrets.LINODE_TOKEN }}
+          TF_VAR_label:               ${{ github.event.inputs.label }}
+          TF_VAR_region:              ${{ github.event.inputs.region }}
+          TF_VAR_type:                ${{ github.event.inputs.type }}
+          TF_VAR_image:               linode/ubuntu24.04
+          TF_VAR_ssh_pub_key:         ${{ secrets.SSH_PUB_KEY }}
+          TF_VAR_root_pass:           ${{ secrets.ROOT_PASS }}
+
+          TF_VAR_domain:              ${{ vars.DOMAIN }}
+          TF_VAR_repo_url:            ${{ vars.REPO_URL }}
+          TF_VAR_acme_email:          ${{ vars.ACME_EMAIL }}
+          TF_VAR_cloudflare_api_token:${{ secrets.CF_API_TOKEN }}
+          TF_VAR_cloudflare_zone_id:  ${{ vars.CF_ZONE_ID }}
+
+          TF_VAR_issuing_ca_cert_pem: ${{ secrets.ISSUING_CA_CERT_PEM }}
+        run: terraform apply -auto-approve
+
+      - name: Show outputs
+        id: tfout
+        working-directory: terraform
+        run: terraform output -json > tfout.json
+
+      - name: Wait for services
+        run: |
+          EDGE_DOMAIN=$(jq -r '.edge_domain.value' terraform/tfout.json)
+          echo "Waiting for API at https://${EDGE_DOMAIN}/healthz"
+          for i in {1..30}; do
+            if curl -sf "https://${EDGE_DOMAIN}/healthz" >/dev/null; then
+              echo "API is up"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Timed out waiting for API" >&2
+          exit 1

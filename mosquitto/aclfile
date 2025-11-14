@@ -1,0 +1,9 @@
+# Actility connector CN (example)
+user actility-connector
+topic write mqtt/things/+/uplink
+topic read  mqtt/things/+/downlink
+
+# TWAB microservice CN (example)
+user twab-service
+topic read  mqtt/things/+/uplink
+topic write mqtt/things/+/downlink

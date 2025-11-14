@@ -1,0 +1,41 @@
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [api]
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    ports:
+      - "8883:8883"                       # MQTT over TLS for Actility/TWAB
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/aclfile:/mosquitto/config/aclfile:ro
+      - mosq_data:/mosquitto/data
+      - mosq_log:/mosquitto/log
+      - ./secrets/mqtt:/etc/mqtt:ro       # server.crt/server.key + ca_chain.crt
+
+  api:
+    build: ./api                          # minimal FastAPI stub with /healthz
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - PORT=${API_PORT:-8080}
+    volumes:
+      - ./data:/app/data
+    expose:
+      - "8080"
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}
+  mosq_data: {}
+  mosq_log: {}

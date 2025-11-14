@@ -1,0 +1,51 @@
+#cloud-config
+package_update: true
+packages:
+  - docker.io
+  - docker-compose-plugin
+  - git
+  - ca-certificates
+  - curl
+
+users:
+  - name: msaver
+    groups: [docker, sudo]
+    shell: /bin/bash
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+    lock_passwd: false
+
+write_files:
+  - path: /opt/edge/.env
+    permissions: "0644"
+    owner: msaver:msaver
+    content: |
+      DOMAIN=${domain}
+      API_PORT=8080
+      SQLITE_PATH=/app/data/twab.sqlite
+      WAVEFORM_DIR=/app/data/waveforms
+      SEGMENT_DIR=/app/data/segments
+  - path: /opt/edge/secrets/mqtt/ca_chain.crt
+    permissions: "0644"
+    owner: msaver:msaver
+    content: |
+      ${issuing_ca_cert_pem}
+
+runcmd:
+  - mkdir -p /opt/edge/secrets/mqtt
+  - chown -R msaver:msaver /opt/edge
+
+  # Clone repo & bring stack up
+  - su - msaver -c "git clone ${repo_url} /opt/edge || true"
+  - su - msaver -c "cd /opt/edge && git pull --ff-only || true"
+
+  # Issue LE cert for edge.<domain> via acme.sh DNS-01 (Cloudflare)
+  - su - msaver -c "curl https://get.acme.sh | sh -s email=${acme_email}"
+  - su - msaver -c "export CF_Token=${cloudflare_api_token} && ~/.acme.sh/acme.sh --issue --dns dns_cf -d edge.${domain}"
+  - su - msaver -c "~/.acme.sh/acme.sh --install-cert -d edge.${domain} \
+      --key-file       /opt/edge/secrets/mqtt/server.key \
+      --fullchain-file /opt/edge/secrets/mqtt/server.crt \
+      --reloadcmd      'docker compose -f /opt/edge/docker-compose.yml restart mosquitto'"
+
+  # Start stack
+  - su - msaver -c "cd /opt/edge && docker compose pull || true"
+  - su - msaver -c "cd /opt/edge && docker compose up -d"
