@@ -22,7 +22,42 @@ permissions:
 jobs:
   provision:
     runs-on: ubuntu-latest
+    env:
+      # Terraform providers / cloud-init inputs
+      TF_VAR_linode_token:         ${{ secrets.LINODE_TOKEN }}
+      TF_VAR_label:                ${{ github.event.inputs.label }}
+      TF_VAR_region:               ${{ github.event.inputs.region }}
+      TF_VAR_type:                 ${{ github.event.inputs.type }}
+      TF_VAR_image:                linode/ubuntu24.04
+      TF_VAR_ssh_pub_key:          ${{ secrets.SSH_PUB_KEY }}
+      TF_VAR_root_pass:            ${{ secrets.ROOT_PASS }}
+
+      TF_VAR_domain:               ${{ vars.DOMAIN }}
+      TF_VAR_repo_url:             ${{ vars.REPO_URL }}
+      TF_VAR_acme_email:           ${{ vars.ACME_EMAIL }}
+
+      # Cloudflare token optional; if absent + CERT_MODE=private, we use Server CA path
+      CLOUDFLARE_API_TOKEN:        ${{ secrets.CF_API_TOKEN }}
+      TF_VAR_cloudflare_api_token: ${{ secrets.CF_API_TOKEN }}
+
+      # Admin token for issuance endpoints (set this as a repo variable or secret)
+      TF_VAR_admin_token:          ${{ vars.ADMIN_TOKEN }}
+
+      # Certificate mode for Mosquitto server: private | letsencrypt
+      TF_VAR_cert_mode:            ${{ vars.CERT_MODE }}
+
     steps:
+      - name: Preflight checks
+        run: |
+          if [ -z "${TF_VAR_admin_token}" ]; then
+            echo "ERROR: ADMIN_TOKEN (repo variable) is required." >&2
+            exit 1
+          fi
+          if [ -z "${TF_VAR_domain}" ]; then
+            echo "ERROR: DOMAIN (repo variable) is required." >&2
+            exit 1
+          fi
+
       - name: Checkout repo
         uses: actions/checkout@v4
 
@@ -35,36 +70,20 @@ jobs:
 
       - name: Terraform Apply
         working-directory: terraform
-        env:
-          TF_VAR_linode_token:        ${{ secrets.LINODE_TOKEN }}
-          TF_VAR_label:               ${{ github.event.inputs.label }}
-          TF_VAR_region:              ${{ github.event.inputs.region }}
-          TF_VAR_type:                ${{ github.event.inputs.type }}
-          TF_VAR_image:               linode/ubuntu24.04
-          TF_VAR_ssh_pub_key:         ${{ secrets.SSH_PUB_KEY }}
-          TF_VAR_root_pass:           ${{ secrets.ROOT_PASS }}
-
-          TF_VAR_domain:              ${{ vars.DOMAIN }}
-          TF_VAR_repo_url:            ${{ vars.REPO_URL }}
-          TF_VAR_acme_email:          ${{ vars.ACME_EMAIL }}
-          TF_VAR_cloudflare_api_token: ${{ secrets.CF_API_TOKEN }}
-          TF_VAR_cloudflare_zone_id:  ${{ vars.CF_ZONE_ID }}
-
-          TF_VAR_issuing_ca_cert_pem: ${{ secrets.ISSUING_CA_CERT_PEM }}
         run: terraform apply -auto-approve
 
-      - name: Show outputs
+      - name: Capture outputs
         id: tfout
         working-directory: terraform
         run: terraform output -json > tfout.json
 
-      - name: Wait for services
+      - name: Wait for API health
         run: |
           EDGE_DOMAIN=$(jq -r '.edge_domain.value' terraform/tfout.json)
           echo "Waiting for API at https://${EDGE_DOMAIN}/healthz"
           for i in {1..30}; do
             if curl -sf "https://${EDGE_DOMAIN}/healthz" >/dev/null; then
-              echo "API is up"
+              echo "API is up at https://${EDGE_DOMAIN}/healthz"
               exit 0
             fi
             sleep 10

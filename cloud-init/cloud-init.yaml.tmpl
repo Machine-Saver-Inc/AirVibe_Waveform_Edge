@@ -6,6 +6,7 @@ packages:
   - git
   - ca-certificates
   - curl
+  - openssl
 
 users:
   - name: msaver
@@ -21,31 +22,92 @@ write_files:
     content: |
       DOMAIN=${domain}
       API_PORT=8080
+      UI_ORIGIN=https://ui.${domain}
+      ADMIN_TOKEN=${admin_token}
+      CERT_MODE=${cert_mode}
       SQLITE_PATH=/app/data/twab.sqlite
       WAVEFORM_DIR=/app/data/waveforms
       SEGMENT_DIR=/app/data/segments
-  - path: /opt/edge/secrets/mqtt/ca_chain.crt
-    permissions: "0644"
+
+  - path: /opt/edge/setup-pki.sh
+    permissions: "0755"
     owner: msaver:msaver
     content: |
-      ${issuing_ca_cert_pem}
+      #!/usr/bin/env bash
+      set -euo pipefail
+      DOMAIN="${domain}"
+      CERT_MODE="${cert_mode}"
+      CF_TOKEN="${cloudflare_api_token}"
+
+      mkdir -p /opt/edge/secrets/mqtt
+      mkdir -p /opt/edge/secrets/pki
+
+      # 1) Issuing CA (client-auth CA)
+      if [ ! -f /opt/edge/secrets/pki/issuing_ca.key ]; then
+        openssl genrsa -out /opt/edge/secrets/pki/issuing_ca.key 4096
+        openssl req -x509 -new -sha256 -days 3650 \
+          -key /opt/edge/secrets/pki/issuing_ca.key \
+          -subj "/CN=AirVibe Issuing CA" \
+          -out /opt/edge/secrets/pki/issuing_ca.crt \
+          -addext basicConstraints=critical,CA:TRUE,pathlen:0 \
+          -addext keyUsage=critical,keyCertSign,cRLSign
+      fi
+
+      # 2) Mosquitto server cert
+      if [ "${CERT_MODE}" = "letsencrypt" ] && [ -n "${CF_TOKEN}" ]; then
+        # LE via DNS-01 for edge.${domain}
+        su - msaver -c "curl https://get.acme.sh | sh -s email=${acme_email}"
+        su - msaver -c "export CF_Token='${cloudflare_api_token}' && ~/.acme.sh/acme.sh --issue --dns dns_cf -d edge.${domain}"
+        su - msaver -c "~/.acme.sh/acme.sh --install-cert -d edge.${domain} \
+            --key-file       /opt/edge/secrets/mqtt/server.key \
+            --fullchain-file /opt/edge/secrets/mqtt/server.crt \
+            --reloadcmd      'docker compose -f /opt/edge/docker-compose.yml restart mosquitto'"
+      else
+        # Private Server CA + server cert for Mosquitto
+        if [ ! -f /opt/edge/secrets/pki/server_ca.key ]; then
+          openssl genrsa -out /opt/edge/secrets/pki/server_ca.key 4096
+          openssl req -x509 -new -sha256 -days 3650 \
+            -key /opt/edge/secrets/pki/server_ca.key \
+            -subj "/CN=AirVibe Server CA" \
+            -out /opt/edge/secrets/pki/server_ca.crt \
+            -addext basicConstraints=critical,CA:TRUE,pathlen:0 \
+            -addext keyUsage=critical,keyCertSign,cRLSign
+        fi
+        # server CSR with SAN edge.${domain}
+        openssl genrsa -out /opt/edge/secrets/mqtt/server.key 2048
+        cat >/tmp/server_openssl.cnf <<EOF
+[req]
+default_md = sha256
+distinguished_name = dn
+req_extensions = v3_req
+prompt = no
+[dn]
+CN = edge.${domain}
+[v3_req]
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+[alt_names]
+DNS.1 = edge.${domain}
+EOF
+        openssl req -new -key /opt/edge/secrets/mqtt/server.key \
+          -out /tmp/server.csr -config /tmp/server_openssl.cnf
+        openssl x509 -req -in /tmp/server.csr \
+          -CA /opt/edge/secrets/pki/server_ca.crt -CAkey /opt/edge/secrets/pki/server_ca.key -CAcreateserial \
+          -out /opt/edge/secrets/mqtt/server.crt -days 825 -sha256 \
+          -extfile /tmp/server_openssl.cnf -extensions v3_req
+        rm -f /tmp/server.csr /tmp/server_openssl.cnf
+      fi
+
+      # 3) Copy Issuing CA public into mosquitto cafile
+      cp /opt/edge/secrets/pki/issuing_ca.crt /opt/edge/secrets/mqtt/ca_chain.crt
+      chmod 0644 /opt/edge/secrets/mqtt/ca_chain.crt
 
 runcmd:
-  - mkdir -p /opt/edge/secrets/mqtt
+  - mkdir -p /opt/edge/secrets/mqtt /opt/edge/secrets/pki
   - chown -R msaver:msaver /opt/edge
-
-  # Clone repo & bring stack up
   - su - msaver -c "git clone ${repo_url} /opt/edge || true"
   - su - msaver -c "cd /opt/edge && git pull --ff-only || true"
-
-  # Issue LE cert for edge.<domain> via acme.sh DNS-01 (Cloudflare)
-  - su - msaver -c "curl https://get.acme.sh | sh -s email=${acme_email}"
-  - su - msaver -c "export CF_Token=${cloudflare_api_token} && ~/.acme.sh/acme.sh --issue --dns dns_cf -d edge.${domain}"
-  - su - msaver -c "~/.acme.sh/acme.sh --install-cert -d edge.${domain} \
-      --key-file       /opt/edge/secrets/mqtt/server.key \
-      --fullchain-file /opt/edge/secrets/mqtt/server.crt \
-      --reloadcmd      'docker compose -f /opt/edge/docker-compose.yml restart mosquitto'"
-
-  # Start stack
-  - su - msaver -c "cd /opt/edge && docker compose pull || true"
+  - bash /opt/edge/setup-pki.sh
+  - su - msaver -c "cd /opt/edge && docker compose build --pull"
   - su - msaver -c "cd /opt/edge && docker compose up -d"

@@ -9,8 +9,10 @@ provider "linode" {
   token = var.linode_token
 }
 
-provider "cloudflare" {
-  api_token = var.cloudflare_api_token
+provider "cloudflare" {}  # reads CLOUDFLARE_API_TOKEN from env if present
+
+data "cloudflare_zone" "zone" {
+  name = var.domain
 }
 
 resource "linode_instance" "edge" {
@@ -22,7 +24,6 @@ resource "linode_instance" "edge" {
   root_pass       = var.root_pass
   booted          = true
 
-  # Cloud-init
   metadata {
     user_data = base64encode(
       templatefile("${path.module}/../cloud-init/cloud-init.yaml.tmpl", {
@@ -30,15 +31,15 @@ resource "linode_instance" "edge" {
         repo_url               = var.repo_url
         acme_email             = var.acme_email
         cloudflare_api_token   = var.cloudflare_api_token
-        issuing_ca_cert_pem    = var.issuing_ca_cert_pem
+        admin_token            = var.admin_token
+        cert_mode              = var.cert_mode
       })
     )
   }
 }
 
-# Create/Update A record: edge.<domain> -> Linode public IPv4
 resource "cloudflare_record" "edge_a" {
-  zone_id = var.cloudflare_zone_id
+  zone_id = data.cloudflare_zone.zone.id
   name    = "edge"
   type    = "A"
   value   = linode_instance.edge.ip_address

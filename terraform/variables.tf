@@ -1,61 +1,20 @@
-variable "linode_token" {
-  type      = string
-  sensitive = true
-}
+variable "linode_token"      { type = string, sensitive = true }
+variable "label"             { type = string, default = "ms-edge-01" }
+variable "region"            { type = string, default = "us-east" }
+variable "type"              { type = string, default = "g6-nanode-1" }
+variable "image"             { type = string, default = "linode/ubuntu24.04" }
+variable "ssh_pub_key"       { type = string, sensitive = true }
+variable "root_pass"         { type = string, sensitive = true }
 
-variable "label" {
-  type    = string
-  default = "ms-edge-01"
-}
+variable "domain"            { type = string }            # e.g., machinesaver.com
+variable "repo_url"          { type = string, default = "https://github.com/Machine-Saver-Inc/AirVibe_Edge" }
 
-variable "region" {
-  type    = string
-  default = "us-east"
-}
+# For acme.sh DNS-01 on the VPS (optional)
+variable "cloudflare_api_token" { type = string, sensitive = true, default = "" }
+variable "acme_email"           { type = string, default = "" }
 
-variable "type" {
-  type    = string
-  default = "g6-nanode-1"
-}
+# Admin token for API issuance endpoints
+variable "admin_token"          { type = string }
 
-variable "image" {
-  type    = string
-  default = "linode/ubuntu24.04"
-}
-
-variable "ssh_pub_key" {
-  type      = string
-  sensitive = true
-}
-
-variable "root_pass" {
-  type      = string
-  sensitive = true
-}
-
-variable "domain" {
-  type = string
-}
-
-variable "repo_url" {
-  type    = string
-  default = "https://github.com/Machine-Saver-Inc/AirVibe_Edge"
-}
-
-variable "cloudflare_api_token" {
-  type      = string
-  sensitive = true
-}
-
-variable "acme_email" {
-  type = string
-}
-
-variable "cloudflare_zone_id" {
-  type = string
-}
-
-# Public Issuing CA cert (PEM) injected into mosquitto
-variable "issuing_ca_cert_pem" {
-  type = string
-}
+# Certificate mode for Mosquitto server: "private" or "letsencrypt"
+variable "cert_mode"            { type = string, default = "private" }
