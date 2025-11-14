@@ -47,7 +47,7 @@ jobs:
           TF_VAR_domain:              ${{ vars.DOMAIN }}
           TF_VAR_repo_url:            ${{ vars.REPO_URL }}
           TF_VAR_acme_email:          ${{ vars.ACME_EMAIL }}
-          TF_VAR_cloudflare_api_token:${{ secrets.CF_API_TOKEN }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.CF_API_TOKEN }}
           TF_VAR_cloudflare_zone_id:  ${{ vars.CF_ZONE_ID }}
 
           TF_VAR_issuing_ca_cert_pem: ${{ secrets.ISSUING_CA_CERT_PEM }}
