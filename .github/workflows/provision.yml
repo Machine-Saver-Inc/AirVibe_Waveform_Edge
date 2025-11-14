@@ -64,6 +64,25 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
+# Add this step BEFORE "Terraform Init
+- name: Ensure defaults for ADMIN_TOKEN and CERT_MODE
+  run: |
+    if [ -z "${TF_VAR_admin_token}" ]; then
+      echo "TF_VAR_admin_token=$(openssl rand -hex 24)" >> $GITHUB_ENV
+      echo "INFO: ADMIN_TOKEN was unset; generated a one-time token for this run."
+    fi
+    if [ -z "${TF_VAR_cert_mode}" ]; then
+      echo "TF_VAR_cert_mode=private" >> $GITHUB_ENV
+      echo "INFO: CERT_MODE unset; defaulting to 'private'."
+    fi
+
+
+
+
+
+
+
+
       - name: Terraform Init
         working-directory: terraform
         run: terraform init
