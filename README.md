@@ -31,7 +31,7 @@
 
 ## Prerequisites
 
-* **Domain** managed in **Cloudflare** (API token with DNS & Zero Trust Access perms)
+* **Domain** managed in **Cloudflare** (API token with DNS)
 * **VPS** (Ubuntu 22.04/24.04) with public IPv4
 * **GitHub** repo secrets:
 
